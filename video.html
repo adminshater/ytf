@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>video</title>
+    <!-- 完全自包含，无外部依赖，适合 GitHub Pages 或任何静态托管 -->
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: #0d1117;  /* GitHub 深色背景 */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 16px;
+        }
+
+        .player-container {
+            width: 100%;
+            max-width: 960px;
+            background: #161b22;   /* GitHub 卡片背景 */
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            overflow: hidden;
+            border: 1px solid #30363d;
+            transition: all 0.2s ease;
+        }
+
+        /* 视频包装器，保持比例 16:9 */
+        .video-wrapper {
+            position: relative;
+            background: #000;
+            aspect-ratio: 16 / 9;
+            width: 100%;
+            cursor: pointer;
+        }
+
+        video {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;  /* 保持完整比例，黑边不裁剪 */
+            background: #0a0c10;
+        }
+
+        /* 自定义控制栏 (悬浮出现 / 激活显示) */
+        .custom-controls {
+            background: rgba(22, 27, 34, 0.95);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            padding: 12px 16px;
+            border-top: 1px solid #30363d;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            color: #e6edf3;
+            transition: opacity 0.2s;
+        }
+
+        /* 按钮基础样式 (GitHub 风格图标文字) */
+        .ctrl-btn {
+            background: transparent;
+            border: none;
+            color: #e6edf3;
+            font-size: 16px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 500;
+            transition: background 0.1s;
+            white-space: nowrap;
+            border: 1px solid transparent;
+        }
+
+        .ctrl-btn:hover {
+            background: #30363d;
+            border-color: #3d444d;
+        }
+
+        .ctrl-btn:active {
+            background: #3d444d;
+        }
+
+        /* 播放/暂停特殊强调 */
+        #playPauseBtn {
+            background: #238636;
+            border-color: #2ea043;
+            padding: 6px 16px;
+        }
+
+        #playPauseBtn:hover {
+            background: #2ea043;
+        }
+
+        /* 进度条区域 */
+        .progress-area {
+            flex: 2 1 300px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 200px;
+        }
+
+        .time-display {
+            font-family: 'JetBrains Mono', 'SF Mono', monospace;
+            font-size: 14px;
+            color: #b1bac4;
+            white-space: nowrap;
+        }
+
+        .seek-bar {
+            flex: 1;
+            height: 6px;
+            background: #3d444d;
+            border-radius: 3px;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .seek-fill {
+            height: 100%;
+            background: #2f81f7;
+            border-radius: 3px;
+            width: 0%;
+            pointer-events: none;
+        }
+
+        .seek-hover {
+            position: absolute;
+            top: -8px;
+            width: 2px;
+            height: 22px;
+            background: rgba(255,255,255,0.5);
+            transform: translateX(-50%);
+            display: none;
+            pointer-events: none;
+        }
+
+        /* 音量控制 */
+        .volume-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 140px;
+        }
+
+        .volume-slider {
+            width: 80px;
+            height: 6px;
+            background: #3d444d;
+            border-radius: 3px;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .volume-fill {
+            height: 100%;
+            background: #2f81f7;
+            border-radius: 3px;
+            width: 100%;
+        }
+
+        /* 右侧扩展区 (全屏/倍速) */
+        .right-controls {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: auto;
+        }
+
+        select {
+            background: #0d1117;
+            color: #e6edf3;
+            border: 1px solid #3d444d;
+            border-radius: 6px;
+            padding: 6px 8px;
+            font-size: 14px;
+            cursor: pointer;
+            outline: none;
+        }
+
+        select:hover {
+            background: #161b22;
+        }
+
+        /* 消息提示 (比如空源) */
+        .hint-message {
+            background: #da3633;
+            color: white;
+            padding: 8px 16px;
+            font-size: 14px;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #f85149;
+        }
+
+        .hint-message.show {
+            display: flex;
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 600px) {
+            .custom-controls {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .progress-area {
+                order: 1;
+                flex-basis: 100%;
+            }
+            .volume-control {
+                min-width: 120px;
+            }
+            .ctrl-btn span {
+                display: none;  /* 小屏隐藏文字，只留图标 */
+            }
+        }
+
+        /* 简单图标使用 Unicode / 字符，纯原生无字体依赖 */
+        .icon-play::before { content: "▶ "; }
+        .icon-pause::before { content: "⏸ "; }
+        .icon-volume-high::before { content: "🔊 "; }
+        .icon-volume-mute::before { content: "🔇 "; }
+        .icon-fullscreen::before { content: "⛶ "; }
+        .icon-exit-fullscreen::before { content: "✕ "; }
+    </style>
+</head>
+<body>
+    <div class="player-container">
+        <!-- 提示区域 (例如没有视频源) -->
+        <div id="hintBox" class="hint-message">
+            <span>⚠️</span> <span id="hintText">未检测到视频文件，请检查路径</span>
+        </div>
+
+        <!-- 视频区域 -->
+        <div class="video-wrapper" id="videoWrapper">
+            <video id="videoPlayer" preload="metadata">
+                <!-- 默认使用一个公开测试视频 (big-buck-bunny 短片段) 确保开箱即用 -->
+                <source src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" type="video/mp4">
+                <!-- 如果上面的源无法加载，后备文字 -->
+                Your browser does not support the video tag.
+            </video>
+        </div>
+
+        <!-- 自定义控制栏 -->
+        <div class="custom-controls" id="controlBar">
+            <!-- 播放/暂停按钮 -->
+            <button class="ctrl-btn" id="playPauseBtn">
+                <span class="icon-play"></span><span id="playPauseText">播放</span>
+            </button>
+
+            <!-- 进度条 + 时间 -->
+            <div class="progress-area">
+                <span class="time-display" id="currentTime">0:00</span>
+                <div class="seek-bar" id="seekBar">
+                    <div class="seek-fill" id="seekFill"></div>
+                    <div class="seek-hover" id="seekHover"></div>
+                </div>
+                <span class="time-display" id="durationTime">0:00</span>
+            </div>
+
+            <!-- 音量控制 -->
+            <div class="volume-control">
+                <button class="ctrl-btn" id="muteBtn">
+                    <span class="icon-volume-high" id="volumeIcon"></span>
+                </button>
+                <div class="volume-slider" id="volumeSlider">
+                    <div class="volume-fill" id="volumeFill" style="width: 100%;"></div>
+                </div>
+            </div>
+
+            <!-- 右侧功能区 -->
+            <div class="right-controls">
+                <select id="speedSelect">
+                    <option value="0.5">0.5x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="1.5">1.5x</option>
+                    <option value="2">2x</option>
+                </select>
+                <button class="ctrl-btn" id="fullscreenBtn">
+                    <span class="icon-fullscreen"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            const video = document.getElementById('videoPlayer');
+            const playPauseBtn = document.getElementById('playPauseBtn');
+            const playPauseText = document.getElementById('playPauseText');
+            const currentTimeSpan = document.getElementById('currentTime');
+            const durationSpan = document.getElementById('durationTime');
+            const seekBar = document.getElementById('seekBar');
+            const seekFill = document.getElementById('seekFill');
+            const seekHover = document.getElementById('seekHover');
+            const muteBtn = document.getElementById('muteBtn');
+            const volumeIcon = document.getElementById('volumeIcon');
+            const volumeSlider = document.getElementById('volumeSlider');
+            const volumeFill = document.getElementById('volumeFill');
+            const speedSelect = document.getElementById('speedSelect');
+            const fullscreenBtn = document.getElementById('fullscreenBtn');
+            const videoWrapper = document.getElementById('videoWrapper');
+            const hintBox = document.getElementById('hintBox');
+            const hintText = document.getElementById('hintText');
+
+            // 初始化隐藏提示 (视频可以加载的话)
+            video.addEventListener('error', (e) => {
+                // 视频源错误时显示提示
+                hintBox.classList.add('show');
+                hintText.innerText = '视频加载失败，请检查网络或视频源地址';
+            }, { once: true });
+
+            // 如果能播放，隐藏提示
+            video.addEventListener('canplay', () => {
+                hintBox.classList.remove('show');
+            });
+
+            // 加载元数据后设置最大时长
+            video.addEventListener('loadedmetadata', () => {
+                durationSpan.innerText = formatTime(video.duration);
+                // 音量初始化
+                video.volume = 1.0;  // 默认满
+                updateVolumeUI();
+            });
+
+            // 时间更新
+            video.addEventListener('timeupdate', () => {
+                updateProgress();
+            });
+
+            video.addEventListener('ended', () => {
+                // 视频结束，显示播放状态重置
+                setPlayButtonState(false);
+            });
+
+            // 播放/暂停按钮逻辑
+            function togglePlay() {
+                if (video.paused) {
+                    video.play().catch(e => {
+                        hintBox.classList.add('show');
+                        hintText.innerText = '无法自动播放: ' + e.message;
+                    });
+                } else {
+                    video.pause();
+                }
+            }
+
+            function setPlayButtonState(isPlaying) {
+                if (isPlaying) {
+                    playPauseBtn.innerHTML = '<span class="icon-pause"></span><span id="playPauseText">暂停</span>';
+                } else {
+                    playPauseBtn.innerHTML = '<span class="icon-play"></span><span id="playPauseText">播放</span>';
+                }
+            }
+
+            playPauseBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                togglePlay();
+            });
+
+            video.addEventListener('play', () => setPlayButtonState(true));
+            video.addEventListener('pause', () => setPlayButtonState(false));
+
+            // 点击视频区域切换播放
+            videoWrapper.addEventListener('click', (e) => {
+                // 如果点击的是控制栏或者按钮，不触发
+                if (e.target.closest('.custom-controls') || e.target.closest('button') || e.target.closest('select')) return;
+                togglePlay();
+            });
+
+            // 格式化时间 mm:ss
+            function formatTime(seconds) {
+                if (isNaN(seconds) || seconds < 0) seconds = 0;
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.floor(seconds % 60);
+                return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+            }
+
+            // 更新进度条
+            function updateProgress() {
+                if (!video.duration) return;
+                const percent = (video.currentTime / video.duration) * 100;
+                seekFill.style.width = percent + '%';
+                currentTimeSpan.innerText = formatTime(video.currentTime);
+            }
+
+            // 进度条跳转 (点击)
+            seekBar.addEventListener('click', (e) => {
+                const rect = seekBar.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const width = rect.width;
+                if (width <= 0 || !video.duration) return;
+                const newTime = (clickX / width) * video.duration;
+                video.currentTime = newTime;
+            });
+
+            // 显示悬停预览时间 (简单显示在hover上)
+            seekBar.addEventListener('mousemove', (e) => {
+                const rect = seekBar.getBoundingClientRect();
+                const hoverX = e.clientX - rect.left;
+                const width = rect.width;
+                if (width <= 0 || !video.duration) return;
+                const hoverTime = (hoverX / width) * video.duration;
+                seekHover.style.left = hoverX + 'px';
+                seekHover.style.display = 'block';
+                seekHover.setAttribute('data-time', formatTime(hoverTime));
+                // 可以简单改个title
+                seekBar.title = formatTime(hoverTime);
+            });
+
+            seekBar.addEventListener('mouseleave', () => {
+                seekHover.style.display = 'none';
+            });
+
+            // 音量控制
+            function updateVolumeUI() {
+                const vol = video.volume;
+                volumeFill.style.width = (vol * 100) + '%';
+                if (video.muted || vol === 0) {
+                    volumeIcon.className = 'icon-volume-mute';
+                } else {
+                    volumeIcon.className = 'icon-volume-high';
+                }
+            }
+
+            volumeSlider.addEventListener('click', (e) => {
+                const rect = volumeSlider.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const width = rect.width;
+                let newVol = clickX / width;
+                if (newVol < 0) newVol = 0;
+                if (newVol > 1) newVol = 1;
+                video.volume = newVol;
+                video.muted = (newVol === 0);
+                updateVolumeUI();
+            });
+
+            muteBtn.addEventListener('click', () => {
+                video.muted = !video.muted;
+                if (video.muted) {
+                    // 如果静音，音量fill保留视觉但显示静音图标
+                    volumeFill.style.width = '0%';  // 显示静音
+                } else {
+                    // 恢复之前音量 (简单从video.volume)
+                    volumeFill.style.width = (video.volume * 100) + '%';
+                }
+                updateVolumeUI();
+            });
+
+            // 监听音量变化 (键盘等)
+            video.addEventListener('volumechange', updateVolumeUI);
+
+            // 播放速度
+            speedSelect.addEventListener('change', (e) => {
+                video.playbackRate = parseFloat(e.target.value);
+            });
+
+            // 全屏
+            function toggleFullscreen() {
+                if (!document.fullscreenElement) {
+                    if (videoWrapper.requestFullscreen) {
+                        videoWrapper.requestFullscreen();
+                    } else if (videoWrapper.webkitRequestFullscreen) {
+                        videoWrapper.webkitRequestFullscreen();
+                    } else if (videoWrapper.msRequestFullscreen) {
+                        videoWrapper.msRequestFullscreen();
+                    }
+                } else {
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen();
+                    } else if (document.webkitExitFullscreen) {
+                        document.webkitExitFullscreen();
+                    } else if (document.msExitFullscreen) {
+                        document.msExitFullscreen();
+                    }
+                }
+            }
+
+            fullscreenBtn.addEventListener('click', toggleFullscreen);
+
+            // 全屏变化时改变图标 (可选)
+            document.addEventListener('fullscreenchange', updateFullscreenIcon);
+            document.addEventListener('webkitfullscreenchange', updateFullscreenIcon);
+            document.addEventListener('msfullscreenchange', updateFullscreenIcon);
+
+            function updateFullscreenIcon() {
+                if (document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement) {
+                    fullscreenBtn.innerHTML = '<span class="icon-exit-fullscreen"></span>';
+                } else {
+                    fullscreenBtn.innerHTML = '<span class="icon-fullscreen"></span>';
+                }
+            }
+
+            // 确保视频源如果挂了，手动再次尝试加载？不，就保持提示
+            // 额外功能: 如果浏览器不支持 video 错误，显示提示
+            if (!video.canPlayType) {
+                hintBox.classList.add('show');
+                hintText.innerText = '您的浏览器不支持 HTML5 视频。';
+            }
+
+            // 初始化当前时间显示
+            currentTimeSpan.innerText = '0:00';
+        })();
+    </script>
+</body>
+</html>
