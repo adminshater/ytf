@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>技术原因边下边看只支持Apple Safari</title>
+    <title>多功能视频播放器 - 带本地缓存</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
@@ -39,6 +39,7 @@
             padding: 10px;
             cursor: pointer;
             border-radius: 5px;
+            min-width: 120px;
             font-size: 14px;
             backdrop-filter: blur(4px);
         }
@@ -48,350 +49,419 @@
         .fullscreen #controls {
             display: none;
         }
-        .status-bar {
-            background-color: rgba(0,0,0,0.7);
+        #cacheStatus {
+            background-color: rgba(0,0,0,0.6);
             color: #0f0;
             padding: 8px 15px;
             border-radius: 20px;
-            font-size: 12px;
+            font-size: 13px;
             display: flex;
             align-items: center;
-            gap: 12px;
+            border: 1px solid #00ff8844;
             backdrop-filter: blur(4px);
-            font-family: monospace;
+            white-space: nowrap;
         }
-        .progress {
-            width: 150px;
+        #cacheProgress {
+            width: 100px;
             height: 6px;
             background-color: #333;
             border-radius: 3px;
+            margin-left: 10px;
             overflow: hidden;
+            display: inline-block;
         }
-        .progress-fill {
+        #cacheProgressFill {
             height: 100%;
             width: 0%;
             background-color: #0f0;
             transition: width 0.2s;
         }
-        .badge {
-            background-color: #ffc107;
-            color: #000;
+        .cached-badge {
+            background-color: #28a745;
+            color: white;
             padding: 2px 8px;
             border-radius: 12px;
             font-size: 11px;
+            margin-left: 8px;
         }
     </style>
 </head>
 <body>
 <div id="videoContainer">
-    <video id="myVideo" autoplay muted loop playsinline></video>
+    <video id="myVideo" autoplay muted loop playsinline>
+        <!-- 默认视频源将通过JS动态插入，以便缓存控制 -->
+    </video>
     <div id="controls">
-        <button id="playButton">🔊 取消静音并全屏</button>
+        <button id="playButton">取消静音并全屏</button>
         <select id="videoSelector">
-            <option value="video1">🎬 视频1</option>
-            <option value="video2">🎬 视频2</option>
-            <option value="video3">🎬 视频3</option>
+            <option value="video1">视频1</option>
+            <option value="video2">视频2</option>
+            <option value="video3">视频3</option>
         </select>
-        <button id="cacheBtn">💾 缓存并边看边存</button>
-        <div class="status-bar">
-            <span>📥</span>
-            <span id="statusText">未缓存</span>
-            <div class="progress">
-                <div id="progressFill" class="progress-fill"></div>
-            </div>
-            <span id="percentText">0%</span>
-            <span id="speedText">0 KB/s</span>
+        <button id="cacheButton" title="将当前视频下载并缓存到本地">⬇️ 缓存当前视频</button>
+        <div id="cacheStatus">
+            <span id="cacheStatusText">未缓存</span>
+            <div id="cacheProgress"><div id="cacheProgressFill"></div></div>
         </div>
     </div>
 </div>
 
 <script>
-    document.addEventListener("DOMContentLoaded", () => {
+    document.addEventListener("DOMContentLoaded", function() {
         const video = document.getElementById("myVideo");
-        const playBtn = document.getElementById("playButton");
-        const selector = document.getElementById("videoSelector");
-        const container = document.getElementById("videoContainer");
-        const cacheBtn = document.getElementById("cacheBtn");
-        const statusText = document.getElementById("statusText");
-        const progressFill = document.getElementById("progressFill");
-        const percentText = document.getElementById("percentText");
-        const speedText = document.getElementById("speedText");
+        const playButton = document.getElementById("playButton");
+        const videoSelector = document.getElementById("videoSelector");
+        const videoContainer = document.getElementById("videoContainer");
+        const cacheButton = document.getElementById("cacheButton");
+        const cacheStatusText = document.getElementById("cacheStatusText");
+        const cacheProgressFill = document.getElementById("cacheProgressFill");
         
         let isFullscreen = false;
-        let isCaching = false;
-        let currentVideoId = "video1";
-        let currentVideoUrl = "";
-        let currentBlobUrl = null;
-        
-        // 视频配置
-        const videos = {
-            video1: { url: "https://adminshater.github.io/ytf/1.mp4", name: "视频1" },
-            video2: { url: "https://adminshater.github.io/ytf/2.mp4", name: "视频2" },
-            video3: { url: "https://adminshater.github.io/ytf/3.mp4", name: "视频3" }
+
+        // 视频库配置 (使用原始在线URL)
+        const videoLibrary = {
+            video1: {
+                mp4: "https://adminshater.github.io/ytf/1.mp4",
+                webm: "video1.webm", // 备用，可能不可用，主要使用mp4
+                name: "视频1"
+            },
+            video2: {
+                mp4: "https://adminshater.github.io/ytf/2.mp4",
+                webm: "video2.webm",
+                name: "视频2"
+            },
+            video3: {
+                mp4: "https://adminshater.github.io/ytf/3.mp4",
+                webm: "video3.webm",
+                name: "视频3"
+            }
         };
-        
-        // IndexedDB 存储
-        const DB_NAME = "MP4Cache";
+
+        // 缓存数据库名称和版本
+        const DB_NAME = 'VideoCacheDB';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'videos';
+
         let db = null;
-        
-        function initDB() {
+        let currentVideoId = 'video1';
+        let currentVideoBlobUrl = null; // 用于跟踪当前使用的blob URL
+
+        // 打开IndexedDB
+        function openDB() {
             return new Promise((resolve, reject) => {
-                if (db) { resolve(db); return; }
-                const request = indexedDB.open(DB_NAME, 1);
-                request.onerror = () => reject(request.error);
-                request.onsuccess = () => {
-                    db = request.result;
+                if (db) {
+                    resolve(db);
+                    return;
+                }
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onerror = (event) => {
+                    console.error('IndexedDB 打开失败:', event.target.error);
+                    reject(event.target.error);
+                };
+                request.onsuccess = (event) => {
+                    db = event.target.result;
+                    // 监听数据库关闭或错误
+                    db.onerror = (e) => console.error('IndexedDB 错误:', e.target.error);
                     resolve(db);
                 };
-                request.onupgradeneeded = (e) => {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains("videos")) {
-                        db.createObjectStore("videos", { keyPath: "id" });
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        // 创建一个对象仓库来存储视频数据，使用videoId作为键
+                        const store = db.createObjectStore(STORE_NAME, { keyPath: 'videoId' });
+                        // 不需要索引，直接通过videoId获取
+                        console.log('视频缓存仓库已创建');
                     }
                 };
             });
         }
-        
-        async function getCache(videoId) {
-            await initDB();
-            return new Promise((resolve) => {
-                const tx = db.transaction(["videos"], "readonly");
-                const store = tx.objectStore("videos");
-                const request = store.get(videoId);
-                request.onsuccess = () => resolve(request.result?.blob || null);
-                request.onerror = () => resolve(null);
-            });
+
+        // 从IndexedDB获取缓存的视频数据
+        async function getCachedVideo(videoId) {
+            try {
+                const database = await openDB();
+                return new Promise((resolve, reject) => {
+                    const transaction = database.transaction([STORE_NAME], 'readonly');
+                    const store = transaction.objectStore(STORE_NAME);
+                    const request = store.get(videoId);
+                    request.onsuccess = () => {
+                        if (request.result) {
+                            console.log(`从缓存加载视频 ${videoId} 成功`);
+                            resolve(request.result.blob);
+                        } else {
+                            console.log(`视频 ${videoId} 未缓存`);
+                            resolve(null);
+                        }
+                    };
+                    request.onerror = (e) => {
+                        console.error('读取缓存失败:', e.target.error);
+                        reject(e.target.error);
+                    };
+                });
+            } catch (e) {
+                console.error('获取缓存出错:', e);
+                return null;
+            }
         }
-        
-        async function saveCache(videoId, blob) {
-            await initDB();
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction(["videos"], "readwrite");
-                const store = tx.objectStore("videos");
-                const request = store.put({ id: videoId, blob, time: Date.now() });
-                request.onsuccess = () => resolve();
-                request.onerror = () => reject(request.error);
-            });
+
+        // 保存视频到IndexedDB
+        async function cacheVideo(videoId, blob) {
+            try {
+                const database = await openDB();
+                return new Promise((resolve, reject) => {
+                    const transaction = database.transaction([STORE_NAME], 'readwrite');
+                    const store = transaction.objectStore(STORE_NAME);
+                    const data = { videoId: videoId, blob: blob, timestamp: Date.now() };
+                    const request = store.put(data);
+                    request.onsuccess = () => {
+                        console.log(`视频 ${videoId} 已缓存到本地`);
+                        resolve();
+                    };
+                    request.onerror = (e) => {
+                        console.error('缓存保存失败:', e.target.error);
+                        reject(e.target.error);
+                    };
+                });
+            } catch (e) {
+                console.error('保存缓存出错:', e);
+                throw e;
+            }
         }
-        
-        // 播放视频
-        async function playVideo(videoId) {
+
+        // 删除blob URL以避免内存泄漏
+        function revokeCurrentBlobUrl() {
+            if (currentVideoBlobUrl) {
+                URL.revokeObjectURL(currentVideoBlobUrl);
+                currentVideoBlobUrl = null;
+            }
+        }
+
+        // 切换视频函数 - 优先使用缓存，如果没有则使用网络
+        async function changeVideo(videoId) {
+            const videoSource = videoLibrary[videoId];
+            if (!videoSource) return;
+
             currentVideoId = videoId;
-            currentVideoUrl = videos[videoId].url;
             
-            // 清理旧 blob URL
-            if (currentBlobUrl) {
-                URL.revokeObjectURL(currentBlobUrl);
-                currentBlobUrl = null;
+            // 更新UI状态为“检查缓存”
+            cacheStatusText.innerText = '检查缓存...';
+            cacheProgressFill.style.width = '0%';
+
+            // 尝试从缓存加载
+            let videoBlob = null;
+            try {
+                videoBlob = await getCachedVideo(videoId);
+            } catch (e) {
+                console.warn('读取缓存失败，将使用网络源', e);
             }
-            
-            // 检查缓存
-            const cached = await getCache(videoId);
-            
-            if (cached) {
-                currentBlobUrl = URL.createObjectURL(cached);
-                video.src = currentBlobUrl;
-                statusText.innerText = "✓ 已缓存";
-                progressFill.style.width = "100%";
-                percentText.innerText = "100%";
+
+            // 清除之前的blob URL
+            revokeCurrentBlobUrl();
+
+            let videoUrl;
+            if (videoBlob) {
+                // 使用缓存的blob创建对象URL
+                videoUrl = URL.createObjectURL(videoBlob);
+                currentVideoBlobUrl = videoUrl; // 记录以便后续释放
+                cacheStatusText.innerText = '已缓存';
+                cacheProgressFill.style.width = '100%';
             } else {
-                video.src = currentVideoUrl;
-                statusText.innerText = "🌐 未缓存";
-                progressFill.style.width = "0%";
-                percentText.innerText = "0%";
+                // 使用原始网络URL
+                videoUrl = videoSource.mp4;
+                cacheStatusText.innerText = '未缓存';
+                cacheProgressFill.style.width = '0%';
             }
+
+            // 更新video元素
+            video.innerHTML = `
+                <source src="${videoUrl}" type="video/mp4">
+                <source src="${videoSource.webm}" type="video/webm">
+                您的浏览器不支持 HTML5 视频。
+            `;
             
             video.load();
-            video.play().catch(e => console.log("需要用户交互"));
+            try {
+                await video.play();
+            } catch (e) {
+                console.log("自动播放被阻止，需要用户交互:", e);
+                // 如果自动播放失败，可以提示用户点击播放按钮
+            }
+
+            // 更新缓存按钮文本
+            updateCacheButtonState();
         }
-        
-        // 边下边播缓存（使用 MediaSource）
-        async function cacheWithStreaming() {
-            if (isCaching) {
-                alert("正在缓存中，请稍后...");
-                return;
+
+        // 更新缓存按钮状态和缓存状态显示
+        async function updateCacheButtonState() {
+            const blob = await getCachedVideo(currentVideoId);
+            if (blob) {
+                cacheStatusText.innerText = '已缓存';
+                cacheProgressFill.style.width = '100%';
+            } else {
+                cacheStatusText.innerText = '未缓存';
+                cacheProgressFill.style.width = '0%';
             }
-            
+        }
+
+        // 下载并缓存当前视频
+        async function downloadAndCacheCurrentVideo() {
             const videoId = currentVideoId;
-            const videoUrl = currentVideoUrl;
-            
-            const existing = await getCache(videoId);
-            if (existing && !confirm("视频已缓存，是否重新缓存？")) {
-                return;
-            }
-            
-            isCaching = true;
-            cacheBtn.disabled = true;
-            cacheBtn.textContent = "⏳ 缓存中...";
-            statusText.innerText = "📥 下载中";
+            const videoSource = videoLibrary[videoId];
+            if (!videoSource) return;
+
+            cacheButton.disabled = true;
+            cacheButton.innerText = '⏳ 缓存中...';
+            cacheStatusText.innerText = '下载中...';
             
             try {
-                // 发起请求获取视频
-                const response = await fetch(videoUrl);
-                if (!response.ok) throw new Error("下载失败");
+                // 使用fetch下载视频，带进度监控
+                const response = await fetch(videoSource.mp4);
+                if (!response.ok) throw new Error(`HTTP错误 ${response.status}`);
                 
-                const contentLength = parseInt(response.headers.get("content-length") || "0");
+                const contentLength = response.headers.get('content-length');
+                const total = contentLength ? parseInt(contentLength, 10) : 0;
+                
                 const reader = response.body.getReader();
                 const chunks = [];
-                let received = 0;
-                let lastTime = Date.now();
-                let lastBytes = 0;
-                
-                // 创建 MediaSource 实现边下边播
-                const mediaSource = new MediaSource();
-                const blobUrl = URL.createObjectURL(mediaSource);
-                
-                // 清理旧 blob URL
-                if (currentBlobUrl && currentBlobUrl !== video.src) {
-                    URL.revokeObjectURL(currentBlobUrl);
-                }
-                currentBlobUrl = blobUrl;
-                video.src = blobUrl;
-                
-                let sourceBuffer = null;
-                let bufferQueue = [];
-                let isAppending = false;
-                
-                mediaSource.addEventListener("sourceopen", async () => {
-                    try {
-                        // 添加 SourceBuffer（MP4 格式）
-                        sourceBuffer = mediaSource.addSourceBuffer('video/mp4');
-                        sourceBuffer.mode = 'sequence';
-                        
-                        sourceBuffer.addEventListener("updateend", () => {
-                            isAppending = false;
-                            if (bufferQueue.length > 0) {
-                                const next = bufferQueue.shift();
-                                appendToBuffer(next);
-                            }
-                        });
-                        
-                        function appendToBuffer(data) {
-                            if (!sourceBuffer || sourceBuffer.updating || !data) return;
-                            try {
-                                isAppending = true;
-                                sourceBuffer.appendBuffer(data);
-                            } catch (e) {
-                                console.error("追加失败:", e);
-                                isAppending = false;
-                            }
-                        }
-                        
-                        // 读取数据流
-                        while (true) {
-                            const { done, value } = await reader.read();
-                            if (done) break;
-                            
-                            chunks.push(value);
-                            received += value.length;
-                            
-                            // 更新进度
-                            if (contentLength > 0) {
-                                const percent = (received / contentLength * 100).toFixed(1);
-                                progressFill.style.width = percent + "%";
-                                percentText.innerText = percent + "%";
-                                statusText.innerText = `📥 ${percent}%`;
-                            }
-                            
-                            // 计算速度
-                            const now = Date.now();
-                            if (now - lastTime >= 1000) {
-                                const speed = (received - lastBytes) / 1024;
-                                speedText.innerText = speed.toFixed(1) + " KB/s";
-                                lastBytes = received;
-                                lastTime = now;
-                            }
-                            
-                            // 边下边播：将数据加入缓冲队列
-                            if (sourceBuffer && !sourceBuffer.updating) {
-                                appendToBuffer(value);
-                            } else if (sourceBuffer) {
-                                bufferQueue.push(value);
-                            }
-                        }
-                        
-                        // 等待队列清空
-                        while (bufferQueue.length > 0 && sourceBuffer && sourceBuffer.updating) {
-                            await new Promise(r => setTimeout(r, 100));
-                        }
-                        
-                        // 结束流
-                        if (mediaSource.readyState === "open") {
-                            mediaSource.endOfStream();
-                        }
-                        
-                        // 保存完整视频到缓存
-                        const completeBlob = new Blob(chunks, { type: "video/mp4" });
-                        await saveCache(videoId, completeBlob);
-                        
-                        statusText.innerText = "✓ 已缓存";
-                        progressFill.style.width = "100%";
-                        percentText.innerText = "100%";
-                        speedText.innerText = "完成";
-                        
-                        alert("✓ 缓存完成！下次播放将使用本地缓存");
-                        
-                    } catch (e) {
-                        console.error("MediaSource 错误:", e);
-                        // 降级：先下载完再播放
-                        const completeBlob = new Blob(chunks, { type: "video/mp4" });
-                        const fallbackUrl = URL.createObjectURL(completeBlob);
-                        video.src = fallbackUrl;
-                        await saveCache(videoId, completeBlob);
-                        statusText.innerText = "✓ 已缓存";
-                        alert("✓ 缓存完成（降级模式）");
+                let receivedLength = 0;
+
+                // 读取数据并更新进度
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    chunks.push(value);
+                    receivedLength += value.length;
+                    
+                    if (total) {
+                        const percent = (receivedLength / total * 100).toFixed(1);
+                        cacheStatusText.innerText = `下载中 ${percent}%`;
+                        cacheProgressFill.style.width = percent + '%';
+                    } else {
+                        // 如果服务器没返回content-length，显示已下载大小
+                        cacheStatusText.innerText = `已下载 ${(receivedLength / 1024 / 1024).toFixed(2)} MB`;
                     }
-                });
+                }
+
+                // 合并所有chunk
+                const blob = new Blob(chunks, { type: 'video/mp4' });
                 
+                // 保存到IndexedDB
+                await cacheVideo(videoId, blob);
+                
+                // 更新显示
+                cacheStatusText.innerText = '已缓存';
+                cacheProgressFill.style.width = '100%';
+                
+                // 如果当前选中的视频就是刚缓存的，则切换为本地blob播放
+                if (currentVideoId === videoId) {
+                    // 释放之前的blob URL
+                    revokeCurrentBlobUrl();
+                    
+                    const newBlobUrl = URL.createObjectURL(blob);
+                    currentVideoBlobUrl = newBlobUrl;
+                    
+                    // 替换视频源为本地缓存
+                    video.innerHTML = `
+                        <source src="${newBlobUrl}" type="video/mp4">
+                        <source src="${videoSource.webm}" type="video/webm">
+                        您的浏览器不支持 HTML5 视频。
+                    `;
+                    video.load();
+                    video.play().catch(e => console.log('自动播放失败', e));
+                }
+                
+                console.log(`视频 ${videoId} 缓存完成`);
             } catch (error) {
-                console.error("缓存失败:", error);
-                statusText.innerText = "❌ 失败";
-                alert("缓存失败: " + error.message);
+                console.error('下载或缓存失败:', error);
+                cacheStatusText.innerText = '缓存失败';
+                alert('缓存失败: ' + error.message);
             } finally {
-                isCaching = false;
-                cacheBtn.disabled = false;
-                cacheBtn.textContent = "💾 缓存并边看边存";
+                cacheButton.disabled = false;
+                cacheButton.innerText = '⬇️ 缓存当前视频';
             }
         }
-        
-        // 切换视频
-        selector.addEventListener("change", async (e) => {
-            if (isCaching && !confirm("切换将取消缓存，确定吗？")) {
-                selector.value = currentVideoId;
-                return;
-            }
-            await playVideo(e.target.value);
-        });
-        
-        // 缓存按钮
-        cacheBtn.addEventListener("click", cacheWithStreaming);
-        
-        // 全屏静音
-        playBtn.addEventListener("click", () => {
+
+        // 初始化播放器控制
+        playButton.addEventListener("click", function() {
+            // 切换静音状态
             video.muted = !video.muted;
+            
+            // 切换全屏
             if (!isFullscreen) {
-                container.requestFullscreen?.();
-                isFullscreen = true;
+                enterFullscreen();
             } else {
-                document.exitFullscreen?.();
-                isFullscreen = false;
+                exitFullscreen();
             }
-            playBtn.textContent = video.muted ? "🔇 取消静音并全屏" : "🔊 静音并退出全屏";
+            
+            updateButtonText();
         });
-        
-        document.addEventListener("fullscreenchange", () => {
+
+        // 视频选择器事件
+        videoSelector.addEventListener("change", function() {
+            changeVideo(this.value);
+        });
+
+        // 缓存按钮事件
+        cacheButton.addEventListener("click", downloadAndCacheCurrentVideo);
+
+        function updateButtonText() {
+            playButton.textContent = video.muted ? 
+                "取消静音并全屏" : 
+                "静音并退出全屏";
+        }
+
+        function enterFullscreen() {
+            if (videoContainer.requestFullscreen) {
+                videoContainer.requestFullscreen()
+                    .then(() => { isFullscreen = true; })
+                    .catch(err => console.error("全屏失败: ", err));
+            } else if (videoContainer.webkitRequestFullscreen) {
+                videoContainer.webkitRequestFullscreen();
+                isFullscreen = true;
+            }
+            
+            document.body.classList.add('fullscreen');
+        }
+
+        function exitFullscreen() {
+            if (document.exitFullscreen) {
+                document.exitFullscreen()
+                    .then(() => { isFullscreen = false; })
+                    .catch(err => console.error("退出全屏失败: ", err));
+            }
+            
+            document.body.classList.remove('fullscreen');
+        }
+
+        // 监听全屏状态变化
+        document.addEventListener('fullscreenchange', () => {
             isFullscreen = !!document.fullscreenElement;
             if (!isFullscreen) {
-                playBtn.textContent = video.muted ? "🔇 取消静音并全屏" : "🔊 静音并退出全屏";
+                document.body.classList.remove('fullscreen');
+                updateButtonText();
             }
         });
-        
-        // 启动
-        initDB().then(() => {
-            playVideo("video1");
+
+        // 监听全屏错误
+        document.addEventListener('fullscreenerror', (e) => {
+            console.error('全屏切换失败:', e);
+        });
+
+        // 初始化数据库并加载默认视频
+        openDB().then(() => {
+            // 设置默认选中
+            videoSelector.value = 'video1';
+            changeVideo('video1');
         }).catch(e => {
-            console.error("数据库失败:", e);
-            playVideo("video1");
+            console.error('IndexedDB初始化失败，将使用普通模式', e);
+            // 降级处理：直接使用网络源
+            changeVideo('video1');
+        });
+
+        // 清理blob URL（当页面卸载时）
+        window.addEventListener('beforeunload', () => {
+            revokeCurrentBlobUrl();
         });
     });
 </script>
