@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>(╯°□°）╯︵ ┻━┻ 缓存不可用</title>
+    <title>多功能播放器 - 视频+音频边下边播</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
@@ -17,11 +17,47 @@
             justify-content: center;
             align-items: center;
             position: relative;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         }
-        video {
+        video, audio {
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
+        }
+        /* 音频播放时的视觉样式 */
+        .audio-mode {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .audio-visualizer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none;
+        }
+        .audio-visualizer canvas {
+            position: absolute;
+            bottom: 20%;
+            left: 0;
+            right: 0;
+            margin: auto;
+            width: 80%;
+            height: 200px;
+            opacity: 0.6;
+        }
+        .audio-info {
+            position: absolute;
+            bottom: 20%;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: white;
+            text-shadow: 0 0 10px rgba(0,0,0,0.5);
+            z-index: 10;
+            font-size: 24px;
+            font-weight: bold;
         }
         #controls {
             position: fixed;
@@ -41,9 +77,16 @@
             border-radius: 5px;
             font-size: 14px;
             backdrop-filter: blur(4px);
+            transition: all 0.2s;
         }
         button:hover, select:hover {
             background-color: rgba(255,255,255,0.9);
+            transform: scale(1.02);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
         }
         .fullscreen #controls {
             display: none;
@@ -80,17 +123,63 @@
             border-radius: 12px;
             font-size: 11px;
         }
+        .audio-badge {
+            background-color: #9b59b6;
+        }
+        .video-badge {
+            background-color: #3498db;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.8);
+            color: #0f0;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 12px;
+            z-index: 10000;
+            animation: slideIn 0.3s ease;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .media-type-selector {
+            background-color: rgba(0,0,0,0.5);
+            border: 1px solid #00ff88;
+        }
+        .media-type-selector option {
+            background-color: #000;
+            color: #0f0;
+        }
     </style>
 </head>
 <body>
 <div id="videoContainer">
-    <video id="myVideo" autoplay muted loop playsinline></video>
+    <video id="myMedia" autoplay muted loop playsinline style="display: none;"></video>
+    <audio id="myAudio" style="display: none;"></audio>
+    <div class="audio-visualizer" id="audioVisualizer" style="display: none;">
+        <canvas id="visualizerCanvas"></canvas>
+        <div class="audio-info" id="audioInfo"></div>
+    </div>
     <div id="controls">
         <button id="playButton">🔊 取消静音并全屏</button>
-        <select id="videoSelector">
-            <option value="video1">🎬 视频1</option>
-            <option value="video2">🎬 视频2</option>
-            <option value="video3">🎬 视频3</option>
+        <select id="mediaSelector" class="media-type-selector">
+            <optgroup label="📹 视频">
+                <option value="video1">🎬 视频1 (MP4)</option>
+                <option value="video2">🎬 视频2 (MP4)</option>
+                <option value="video3">🎬 视频3 (MP4)</option>
+            </optgroup>
+            <optgroup label="🎵 音频">
+                <option value="audio1">🎵 音频1 - 测试音乐</option>
+                <option value="audio2">🎵 音频2 - 钢琴曲</option>
+                <option value="audio3">🎵 音频3 - 电子音乐</option>
+            </optgroup>
         </select>
         <button id="cacheBtn">💾 缓存并边看边存</button>
         <div class="status-bar">
@@ -101,37 +190,54 @@
             </div>
             <span id="percentText">0%</span>
             <span id="speedText">0 KB/s</span>
+            <span id="mediaTypeBadge" class="badge video-badge">视频</span>
         </div>
     </div>
 </div>
 
 <script>
     document.addEventListener("DOMContentLoaded", () => {
-        const video = document.getElementById("myVideo");
+        const mediaElement = document.getElementById("myMedia");
+        const audioElement = document.getElementById("myAudio");
         const playBtn = document.getElementById("playButton");
-        const selector = document.getElementById("videoSelector");
+        const selector = document.getElementById("mediaSelector");
         const container = document.getElementById("videoContainer");
         const cacheBtn = document.getElementById("cacheBtn");
         const statusText = document.getElementById("statusText");
         const progressFill = document.getElementById("progressFill");
         const percentText = document.getElementById("percentText");
         const speedText = document.getElementById("speedText");
+        const mediaTypeBadge = document.getElementById("mediaTypeBadge");
+        const audioVisualizer = document.getElementById("audioVisualizer");
+        const audioInfo = document.getElementById("audioInfo");
+        const visualizerCanvas = document.getElementById("visualizerCanvas");
         
         let isFullscreen = false;
         let isCaching = false;
-        let currentVideoId = "video1";
-        let currentVideoUrl = "";
+        let currentMediaId = "video1";
+        let currentMediaUrl = "";
+        let currentMediaType = "video"; // video 或 audio
         let currentBlobUrl = null;
+        let currentHls = null;
+        let audioContext = null;
+        let audioSource = null;
+        let analyser = null;
+        let animationId = null;
         
-        // 视频配置
-        const videos = {
-            video1: { url: "https://adminshater.github.io/ytf/1.mp4", name: "视频1" },
-            video2: { url: "https://adminshater.github.io/ytf/2.mp4", name: "视频2" },
-            video3: { url: "https://adminshater.github.io/ytf/3.mp4", name: "视频3" }
+        // 媒体库配置（视频 + 音频）
+        const mediaLibrary = {
+            // 视频
+            video1: { url: "https://adminshater.github.io/ytf/1.mp4", name: "视频1", type: "video", mime: "video/mp4" },
+            video2: { url: "https://adminshater.github.io/ytf/2.mp4", name: "视频2", type: "video", mime: "video/mp4" },
+            video3: { url: "https://adminshater.github.io/ytf/3.mp4", name: "视频3", type: "video", mime: "video/mp4" },
+            // 音频（使用公开的测试音频文件）
+            audio1: { url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", name: "测试音乐1", type: "audio", mime: "audio/mpeg" },
+            audio2: { url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3", name: "钢琴曲", type: "audio", mime: "audio/mpeg" },
+            audio3: { url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3", name: "电子音乐", type: "audio", mime: "audio/mpeg" }
         };
         
         // IndexedDB 存储
-        const DB_NAME = "MP4Cache";
+        const DB_NAME = "MediaCache_V2";
         let db = null;
         
         function initDB() {
@@ -145,39 +251,141 @@
                 };
                 request.onupgradeneeded = (e) => {
                     const db = e.target.result;
-                    if (!db.objectStoreNames.contains("videos")) {
-                        db.createObjectStore("videos", { keyPath: "id" });
+                    if (!db.objectStoreNames.contains("media")) {
+                        db.createObjectStore("media", { keyPath: "id" });
                     }
                 };
             });
         }
         
-        async function getCache(videoId) {
+        async function getCache(mediaId) {
             await initDB();
             return new Promise((resolve) => {
-                const tx = db.transaction(["videos"], "readonly");
-                const store = tx.objectStore("videos");
-                const request = store.get(videoId);
+                const tx = db.transaction(["media"], "readonly");
+                const store = tx.objectStore("media");
+                const request = store.get(mediaId);
                 request.onsuccess = () => resolve(request.result?.blob || null);
                 request.onerror = () => resolve(null);
             });
         }
         
-        async function saveCache(videoId, blob) {
+        async function saveCache(mediaId, blob, metadata = {}) {
             await initDB();
             return new Promise((resolve, reject) => {
-                const tx = db.transaction(["videos"], "readwrite");
-                const store = tx.objectStore("videos");
-                const request = store.put({ id: videoId, blob, time: Date.now() });
+                const tx = db.transaction(["media"], "readwrite");
+                const store = tx.objectStore("media");
+                const request = store.put({ id: mediaId, blob, metadata, time: Date.now() });
                 request.onsuccess = () => resolve();
                 request.onerror = () => reject(request.error);
             });
         }
         
-        // 播放视频
-        async function playVideo(videoId) {
-            currentVideoId = videoId;
-            currentVideoUrl = videos[videoId].url;
+        function showToast(message, isError = false) {
+            const toast = document.createElement("div");
+            toast.className = "toast";
+            toast.textContent = message;
+            toast.style.background = isError ? "rgba(255,0,0,0.8)" : "rgba(0,0,0,0.8)";
+            toast.style.color = isError ? "#fff" : "#0f0";
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+        
+        // 音频可视化
+        function setupAudioVisualizer(audioElement) {
+            // 停止之前的动画
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            
+            if (!audioElement.paused && !audioElement.ended) {
+                try {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = audioContext.createAnalyser();
+                    analyser.fftSize = 256;
+                    const bufferLength = analyser.frequencyBinCount;
+                    const dataArray = new Uint8Array(bufferLength);
+                    
+                    audioSource = audioContext.createMediaElementSource(audioElement);
+                    audioSource.connect(analyser);
+                    analyser.connect(audioContext.destination);
+                    
+                    const canvas = visualizerCanvas;
+                    const ctx = canvas.getContext("2d");
+                    
+                    function draw() {
+                        if (!analyser || !audioElement || audioElement.paused) {
+                            animationId = null;
+                            return;
+                        }
+                        
+                        const width = canvas.clientWidth;
+                        const height = canvas.clientHeight;
+                        canvas.width = width;
+                        canvas.height = height;
+                        
+                        analyser.getByteFrequencyData(dataArray);
+                        
+                        ctx.clearRect(0, 0, width, height);
+                        const barWidth = (width / bufferLength) * 2.5;
+                        let x = 0;
+                        
+                        for (let i = 0; i < bufferLength; i++) {
+                            const barHeight = (dataArray[i] / 255) * height;
+                            const gradient = ctx.createLinearGradient(0, height - barHeight, 0, height);
+                            gradient.addColorStop(0, "#00ff88");
+                            gradient.addColorStop(1, "#ff3366");
+                            ctx.fillStyle = gradient;
+                            ctx.fillRect(x, height - barHeight, barWidth - 1, barHeight);
+                            x += barWidth;
+                        }
+                        
+                        animationId = requestAnimationFrame(draw);
+                    }
+                    
+                    draw();
+                    audioContext.resume();
+                } catch (e) {
+                    console.log("音频可视化不支持:", e);
+                }
+            }
+        }
+        
+        // 播放媒体
+        async function playMedia(mediaId) {
+            currentMediaId = mediaId;
+            const mediaInfo = mediaLibrary[mediaId];
+            if (!mediaInfo) return;
+            
+            currentMediaUrl = mediaInfo.url;
+            currentMediaType = mediaInfo.type;
+            
+            // 更新UI显示
+            if (currentMediaType === "video") {
+                mediaTypeBadge.textContent = "🎬 视频";
+                mediaTypeBadge.className = "badge video-badge";
+                container.classList.remove("audio-mode");
+                audioVisualizer.style.display = "none";
+                mediaElement.style.display = "block";
+                audioElement.style.display = "none";
+                // 停止音频可视化
+                if (animationId) {
+                    cancelAnimationFrame(animationId);
+                    animationId = null;
+                }
+            } else {
+                mediaTypeBadge.textContent = "🎵 音频";
+                mediaTypeBadge.className = "badge audio-badge";
+                container.classList.add("audio-mode");
+                audioVisualizer.style.display = "block";
+                mediaElement.style.display = "none";
+                audioElement.style.display = "block";
+                audioInfo.textContent = mediaInfo.name;
+            }
             
             // 清理旧 blob URL
             if (currentBlobUrl) {
@@ -185,38 +393,56 @@
                 currentBlobUrl = null;
             }
             
+            // 停止当前播放
+            if (currentHls) {
+                currentHls.destroy();
+                currentHls = null;
+            }
+            
             // 检查缓存
-            const cached = await getCache(videoId);
+            const cached = await getCache(mediaId);
+            const targetElement = currentMediaType === "video" ? mediaElement : audioElement;
             
             if (cached) {
                 currentBlobUrl = URL.createObjectURL(cached);
-                video.src = currentBlobUrl;
+                targetElement.src = currentBlobUrl;
                 statusText.innerText = "✓ 已缓存";
                 progressFill.style.width = "100%";
                 percentText.innerText = "100%";
+                showToast(`✓ 从本地缓存加载 ${mediaInfo.name}`);
             } else {
-                video.src = currentVideoUrl;
+                targetElement.src = currentMediaUrl;
                 statusText.innerText = "🌐 未缓存";
                 progressFill.style.width = "0%";
                 percentText.innerText = "0%";
             }
             
-            video.load();
-            video.play().catch(e => console.log("需要用户交互"));
+            targetElement.load();
+            try {
+                await targetElement.play();
+                if (currentMediaType === "audio") {
+                    setupAudioVisualizer(audioElement);
+                }
+            } catch (e) {
+                console.log("自动播放被阻止:", e);
+            }
         }
         
-        // 边下边播缓存（使用 MediaSource）
+        // 边下边播缓存
         async function cacheWithStreaming() {
             if (isCaching) {
-                alert("正在缓存中，请稍后...");
+                showToast("正在缓存中，请稍后...");
                 return;
             }
             
-            const videoId = currentVideoId;
-            const videoUrl = currentVideoUrl;
+            const mediaId = currentMediaId;
+            const mediaInfo = mediaLibrary[mediaId];
+            const mediaUrl = currentMediaUrl;
             
-            const existing = await getCache(videoId);
-            if (existing && !confirm("视频已缓存，是否重新缓存？")) {
+            if (!mediaInfo) return;
+            
+            const existing = await getCache(mediaId);
+            if (existing && !confirm(`"${mediaInfo.name}" 已缓存，是否重新缓存？`)) {
                 return;
             }
             
@@ -224,129 +450,171 @@
             cacheBtn.disabled = true;
             cacheBtn.textContent = "⏳ 缓存中...";
             statusText.innerText = "📥 下载中";
+            progressFill.style.width = "0%";
+            percentText.innerText = "0%";
+            
+            const targetElement = currentMediaType === "video" ? mediaElement : audioElement;
+            const chunks = [];
+            let received = 0;
+            let totalLength = 0;
+            let lastTime = Date.now();
+            let lastBytes = 0;
             
             try {
-                // 发起请求获取视频
-                const response = await fetch(videoUrl);
-                if (!response.ok) throw new Error("下载失败");
+                const response = await fetch(mediaUrl);
+                if (!response.ok) throw new Error(`下载失败: ${response.status}`);
                 
-                const contentLength = parseInt(response.headers.get("content-length") || "0");
+                totalLength = parseInt(response.headers.get("content-length") || "0");
                 const reader = response.body.getReader();
-                const chunks = [];
-                let received = 0;
-                let lastTime = Date.now();
-                let lastBytes = 0;
                 
-                // 创建 MediaSource 实现边下边播
-                const mediaSource = new MediaSource();
-                const blobUrl = URL.createObjectURL(mediaSource);
-                
-                // 清理旧 blob URL
-                if (currentBlobUrl && currentBlobUrl !== video.src) {
-                    URL.revokeObjectURL(currentBlobUrl);
-                }
-                currentBlobUrl = blobUrl;
-                video.src = blobUrl;
-                
+                // 对于音频和视频都使用 MediaSource 实现边下边播（如果支持）
+                let useMediaSource = false;
+                let mediaSource = null;
                 let sourceBuffer = null;
                 let bufferQueue = [];
                 let isAppending = false;
                 
-                mediaSource.addEventListener("sourceopen", async () => {
+                // 检查是否支持 MediaSource
+                if (window.MediaSource && currentMediaType === "video") {
                     try {
-                        // 添加 SourceBuffer（MP4 格式）
-                        sourceBuffer = mediaSource.addSourceBuffer('video/mp4');
-                        sourceBuffer.mode = 'sequence';
-                        
-                        sourceBuffer.addEventListener("updateend", () => {
-                            isAppending = false;
-                            if (bufferQueue.length > 0) {
-                                const next = bufferQueue.shift();
-                                appendToBuffer(next);
-                            }
-                        });
-                        
-                        function appendToBuffer(data) {
-                            if (!sourceBuffer || sourceBuffer.updating || !data) return;
-                            try {
-                                isAppending = true;
-                                sourceBuffer.appendBuffer(data);
-                            } catch (e) {
-                                console.error("追加失败:", e);
-                                isAppending = false;
-                            }
+                        mediaSource = new MediaSource();
+                        const blobUrl = URL.createObjectURL(mediaSource);
+                        if (currentBlobUrl && currentBlobUrl !== targetElement.src) {
+                            URL.revokeObjectURL(currentBlobUrl);
                         }
-                        
-                        // 读取数据流
-                        while (true) {
-                            const { done, value } = await reader.read();
-                            if (done) break;
-                            
-                            chunks.push(value);
-                            received += value.length;
-                            
-                            // 更新进度
-                            if (contentLength > 0) {
-                                const percent = (received / contentLength * 100).toFixed(1);
-                                progressFill.style.width = percent + "%";
-                                percentText.innerText = percent + "%";
-                                statusText.innerText = `📥 ${percent}%`;
-                            }
-                            
-                            // 计算速度
-                            const now = Date.now();
-                            if (now - lastTime >= 1000) {
-                                const speed = (received - lastBytes) / 1024;
-                                speedText.innerText = speed.toFixed(1) + " KB/s";
-                                lastBytes = received;
-                                lastTime = now;
-                            }
-                            
-                            // 边下边播：将数据加入缓冲队列
-                            if (sourceBuffer && !sourceBuffer.updating) {
-                                appendToBuffer(value);
-                            } else if (sourceBuffer) {
-                                bufferQueue.push(value);
-                            }
-                        }
-                        
-                        // 等待队列清空
-                        while (bufferQueue.length > 0 && sourceBuffer && sourceBuffer.updating) {
-                            await new Promise(r => setTimeout(r, 100));
-                        }
-                        
-                        // 结束流
-                        if (mediaSource.readyState === "open") {
-                            mediaSource.endOfStream();
-                        }
-                        
-                        // 保存完整视频到缓存
-                        const completeBlob = new Blob(chunks, { type: "video/mp4" });
-                        await saveCache(videoId, completeBlob);
-                        
-                        statusText.innerText = "✓ 已缓存";
-                        progressFill.style.width = "100%";
-                        percentText.innerText = "100%";
-                        speedText.innerText = "完成";
-                        
-                        alert("✓ 缓存完成！下次播放将使用本地缓存");
-                        
+                        currentBlobUrl = blobUrl;
+                        targetElement.src = blobUrl;
+                        useMediaSource = true;
                     } catch (e) {
-                        console.error("MediaSource 错误:", e);
-                        // 降级：先下载完再播放
-                        const completeBlob = new Blob(chunks, { type: "video/mp4" });
-                        const fallbackUrl = URL.createObjectURL(completeBlob);
-                        video.src = fallbackUrl;
-                        await saveCache(videoId, completeBlob);
-                        statusText.innerText = "✓ 已缓存";
-                        alert("✓ 缓存完成（降级模式）");
+                        console.log("MediaSource 不支持，使用普通模式");
+                        useMediaSource = false;
                     }
-                });
+                }
+                
+                if (useMediaSource) {
+                    // MediaSource 边下边播模式
+                    mediaSource.addEventListener("sourceopen", async () => {
+                        try {
+                            sourceBuffer = mediaSource.addSourceBuffer(mediaInfo.mime);
+                            sourceBuffer.mode = "sequence";
+                            
+                            sourceBuffer.addEventListener("updateend", () => {
+                                isAppending = false;
+                                if (bufferQueue.length > 0) {
+                                    const next = bufferQueue.shift();
+                                    appendToBuffer(next);
+                                }
+                            });
+                            
+                            function appendToBuffer(data) {
+                                if (!sourceBuffer || sourceBuffer.updating || !data) return;
+                                try {
+                                    isAppending = true;
+                                    sourceBuffer.appendBuffer(data);
+                                } catch (e) {
+                                    console.error("追加失败:", e);
+                                    isAppending = false;
+                                }
+                            }
+                            
+                            // 读取数据流
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+                                
+                                chunks.push(value);
+                                received += value.length;
+                                updateProgress(received, totalLength);
+                                
+                                // 边下边播
+                                if (sourceBuffer && !sourceBuffer.updating) {
+                                    appendToBuffer(value);
+                                } else if (sourceBuffer) {
+                                    bufferQueue.push(value);
+                                }
+                            }
+                            
+                            // 等待队列清空
+                            while (bufferQueue.length > 0 && sourceBuffer && sourceBuffer.updating) {
+                                await new Promise(r => setTimeout(r, 100));
+                            }
+                            
+                            if (mediaSource.readyState === "open") {
+                                mediaSource.endOfStream();
+                            }
+                            
+                        } catch (e) {
+                            console.error("MediaSource 错误:", e);
+                            throw e;
+                        }
+                    });
+                } else {
+                    // 普通模式：先下载完再播放
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        
+                        chunks.push(value);
+                        received += value.length;
+                        updateProgress(received, totalLength);
+                        
+                        // 计算速度
+                        const now = Date.now();
+                        if (now - lastTime >= 1000) {
+                            const speed = (received - lastBytes) / 1024;
+                            speedText.innerText = speed.toFixed(1) + " KB/s";
+                            lastBytes = received;
+                            lastTime = now;
+                        }
+                    }
+                }
+                
+                function updateProgress(received, total) {
+                    if (total > 0) {
+                        const percent = (received / total * 100).toFixed(1);
+                        progressFill.style.width = percent + "%";
+                        percentText.innerText = percent + "%";
+                        statusText.innerText = `📥 ${percent}%`;
+                    } else {
+                        statusText.innerText = `📥 ${(received / 1024 / 1024).toFixed(1)} MB`;
+                    }
+                }
+                
+                // 保存完整文件到缓存
+                const completeBlob = new Blob(chunks, { type: mediaInfo.mime });
+                await saveCache(mediaId, completeBlob, { name: mediaInfo.name, type: mediaInfo.type });
+                
+                // 如果不是 MediaSource 模式，需要切换播放源
+                if (!useMediaSource) {
+                    const blobUrl = URL.createObjectURL(completeBlob);
+                    if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+                    currentBlobUrl = blobUrl;
+                    
+                    const wasPlaying = !targetElement.paused;
+                    const currentTime = targetElement.currentTime;
+                    
+                    targetElement.src = blobUrl;
+                    targetElement.load();
+                    
+                    targetElement.addEventListener("loadedmetadata", () => {
+                        targetElement.currentTime = currentTime;
+                        if (wasPlaying) {
+                            targetElement.play();
+                        }
+                    }, { once: true });
+                }
+                
+                statusText.innerText = "✓ 已缓存";
+                progressFill.style.width = "100%";
+                percentText.innerText = "100%";
+                speedText.innerText = "完成";
+                
+                showToast(`✓ "${mediaInfo.name}" 缓存完成！下次将使用本地缓存`);
                 
             } catch (error) {
                 console.error("缓存失败:", error);
                 statusText.innerText = "❌ 失败";
-                alert("缓存失败: " + error.message);
+                showToast(`缓存失败: ${error.message}`, true);
             } finally {
                 isCaching = false;
                 cacheBtn.disabled = false;
@@ -354,44 +622,65 @@
             }
         }
         
-        // 切换视频
+        // 切换媒体
         selector.addEventListener("change", async (e) => {
             if (isCaching && !confirm("切换将取消缓存，确定吗？")) {
-                selector.value = currentVideoId;
+                selector.value = currentMediaId;
                 return;
             }
-            await playVideo(e.target.value);
+            await playMedia(e.target.value);
         });
         
         // 缓存按钮
         cacheBtn.addEventListener("click", cacheWithStreaming);
         
-        // 全屏静音
+        // 全屏/静音按钮（音频模式下静音按钮行为不同）
         playBtn.addEventListener("click", () => {
-            video.muted = !video.muted;
-            if (!isFullscreen) {
+            const targetElement = currentMediaType === "video" ? mediaElement : audioElement;
+            targetElement.muted = !targetElement.muted;
+            
+            if (currentMediaType === "video" && !isFullscreen) {
                 container.requestFullscreen?.();
                 isFullscreen = true;
-            } else {
+            } else if (currentMediaType === "video" && isFullscreen) {
                 document.exitFullscreen?.();
                 isFullscreen = false;
             }
-            playBtn.textContent = video.muted ? "🔇 取消静音并全屏" : "🔊 静音并退出全屏";
+            
+            const muteIcon = targetElement.muted ? "🔇" : "🔊";
+            const fullscreenText = currentMediaType === "video" ? (isFullscreen ? "退出全屏" : "全屏") : "";
+            playBtn.textContent = `${muteIcon} ${targetElement.muted ? "取消静音" : "静音"} ${fullscreenText}`;
         });
         
         document.addEventListener("fullscreenchange", () => {
             isFullscreen = !!document.fullscreenElement;
             if (!isFullscreen) {
-                playBtn.textContent = video.muted ? "🔇 取消静音并全屏" : "🔊 静音并退出全屏";
+                const targetElement = currentMediaType === "video" ? mediaElement : audioElement;
+                playBtn.textContent = `${targetElement.muted ? "🔇" : "🔊"} ${targetElement.muted ? "取消静音" : "静音"} 全屏`;
+            }
+        });
+        
+        // 监听媒体结束，重新启动音频可视化
+        audioElement.addEventListener("play", () => {
+            if (currentMediaType === "audio") {
+                setupAudioVisualizer(audioElement);
+            }
+        });
+        
+        // 窗口大小变化时调整 canvas
+        window.addEventListener("resize", () => {
+            if (visualizerCanvas) {
+                visualizerCanvas.style.width = "80%";
+                visualizerCanvas.style.height = "200px";
             }
         });
         
         // 启动
         initDB().then(() => {
-            playVideo("video1");
+            playMedia("video1");
         }).catch(e => {
             console.error("数据库失败:", e);
-            playVideo("video1");
+            playMedia("video1");
         });
     });
 </script>
